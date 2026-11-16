@@ -1,0 +1,6 @@
+id=meow_iconshape
+name=Meow icon shape overlay
+version=0
+versionCode=0
+author=ImMALWARE
+description=Applies meow (cat-ears) icon mask natively via a lightweight RRO overlay on framework-res.

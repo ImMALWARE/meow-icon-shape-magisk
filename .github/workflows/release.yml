@@ -1,0 +1,77 @@
+name: Build & release module
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine build number
+        id: buildnum
+        run: |
+          git fetch --tags
+          LAST_NUM=$(git tag -l "[0-9]*" | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
+          if [ -z "$LAST_NUM" ]; then
+            BUILD_NUM=1
+          else
+            BUILD_NUM=$((LAST_NUM + 1))
+          fi
+          echo "BUILD_NUM=$BUILD_NUM" >> "$GITHUB_OUTPUT"
+          echo "Build number: $BUILD_NUM"
+
+      - name: Set app and module version for build
+        run: |
+          BUILD_NUM="${{ steps.buildnum.outputs.BUILD_NUM }}"
+          sed -i "s/android:versionCode=\"0\"/android:versionCode=\"${BUILD_NUM}\"/" src/main/AndroidManifest.xml
+          sed -i "s/android:versionName=\"0\"/android:versionName=\"${BUILD_NUM}\"/" src/main/AndroidManifest.xml
+          grep -q "android:versionCode=\"${BUILD_NUM}\"" src/main/AndroidManifest.xml
+          grep -q "android:versionName=\"${BUILD_NUM}\"" src/main/AndroidManifest.xml
+
+          sed -i "s/^version=0$/version=${BUILD_NUM}/" module/module.prop
+          sed -i "s/^versionCode=0$/versionCode=${BUILD_NUM}/" module/module.prop
+          grep -q "^version=${BUILD_NUM}$" module/module.prop
+          grep -q "^versionCode=${BUILD_NUM}$" module/module.prop
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "KEYSTORE_BASE64 secret is empty" >&2
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n\t' | base64 --decode > "${{ github.workspace }}/release.keystore"
+
+      - name: Build and sign APK
+        env:
+          KEYSTORE: ${{ github.workspace }}/release.keystore
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          mkdir -p release-artifacts
+          bash scripts/build-apk.sh "${{ github.workspace }}/release-artifacts/meow-icon-shape-${{ steps.buildnum.outputs.BUILD_NUM }}.apk"
+
+      - name: Package module
+        run: |
+          BUILD_NUM="${{ steps.buildnum.outputs.BUILD_NUM }}"
+          bash scripts/build-module.sh \
+            "${{ github.workspace }}/release-artifacts/meow-icon-shape-${BUILD_NUM}.apk" \
+            "${{ github.workspace }}/release-artifacts/meow-icon-shape-magisk-${BUILD_NUM}.zip"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ steps.buildnum.outputs.BUILD_NUM }}"
+          target_commitish: ${{ github.sha }}
+          name: "Meow Icon Shape ${{ steps.buildnum.outputs.BUILD_NUM }}"
+          files: release-artifacts/meow-icon-shape-magisk-*.zip
+          body: |
+            Build ${{ steps.buildnum.outputs.BUILD_NUM }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
